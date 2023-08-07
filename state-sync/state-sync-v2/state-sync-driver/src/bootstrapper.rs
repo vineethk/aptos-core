@@ -464,7 +464,8 @@ impl<
         let highest_known_ledger_version = highest_known_ledger_info.ledger_info().version();
 
         // If we've already synced to the highest known version, there's nothing to do
-        if highest_synced_version >= highest_known_ledger_version {
+        // If the highest know version is 0, we still fast sync the genesis state
+        if highest_synced_version >= highest_known_ledger_version && highest_known_ledger_version > 0 {
             info!(LogSchema::new(LogEntry::Bootstrapper)
                 .message(&format!("Highest synced version {} is >= highest known ledger version {}, nothing needs to be done.",
                     highest_synced_version, highest_known_ledger_version)));

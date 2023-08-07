@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, Result};
-use aptos_backup_service::{start_backup_service, start_backup_service_with_fast_sync_wrapper};
+use aptos_backup_service::start_backup_service;
 use aptos_config::{config::NodeConfig, utils::get_genesis_txn};
 use aptos_db::{fast_sync_aptos_db::FastSyncStorageWrapper, AptosDB};
 use aptos_executor::db_bootstrapper::maybe_bootstrap;
@@ -40,10 +40,10 @@ pub(crate) fn bootstrap_db(
             },
             (None, Some(fast_sync_db_wrapper)) => {
                 let (db_arc, db_rw) = DbReaderWriter::wrap(fast_sync_db_wrapper);
-                let db_backup_service = start_backup_service_with_fast_sync_wrapper(
-                    node_config.storage.backup_service_address,
-                    db_arc.clone(),
-                );
+                let fast_sync_db = db_arc.get_fast_sync_db();
+                let db_backup_service =
+                    start_backup_service(node_config.storage.backup_service_address, fast_sync_db);
+
                 (db_arc as Arc<dyn DbReader>, db_rw, Some(db_backup_service))
             },
             _ => unreachable!(),

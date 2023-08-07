@@ -1,15 +1,8 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    backup::backup_handler::DbState,
-    metrics::{
-        BACKUP_EPOCH_ENDING_EPOCH, BACKUP_STATE_SNAPSHOT_LEAF_IDX, BACKUP_STATE_SNAPSHOT_VERSION,
-        BACKUP_TXN_VERSION,
-    },
-    AptosDB,
-};
-use anyhow::{anyhow, ensure, Context, Result};
+use crate::AptosDB;
+use anyhow::{anyhow, Result};
 use aptos_config::config::{BootstrappingMode, NodeConfig};
 use aptos_crypto::HashValue;
 use aptos_storage_interface::{
@@ -25,8 +18,7 @@ use aptos_types::{
     ledger_info::LedgerInfoWithSignatures,
     proof::{
         AccumulatorConsistencyProof, SparseMerkleProof, SparseMerkleProofExt,
-        SparseMerkleRangeProof, TransactionAccumulatorRangeProof, TransactionAccumulatorSummary,
-        TransactionInfoWithProof,
+        TransactionAccumulatorRangeProof, TransactionAccumulatorSummary,
     },
     state_proof::StateProof,
     state_store::{
@@ -58,9 +50,9 @@ pub enum FastSyncStatus {
 /// This is a wrapper around [AptosDB] that is used to bootstrap the node for fast sync mode
 pub struct FastSyncStorageWrapper {
     // Used for storing genesis data during fast sync
-    temporary_db_with_genesis: AptosDB,
+    temporary_db_with_genesis: Arc<AptosDB>,
     // Used for restoring fast sync snapshot and all the read/writes afterwards
-    db_for_fast_sync: Option<AptosDB>,
+    db_for_fast_sync: Arc<AptosDB>,
     // This is for reading the fast_sync status to determine which db to use
     fast_sync_status: Arc<RwLock<FastSyncStatus>>,
 }
@@ -103,14 +95,18 @@ impl FastSyncStorageWrapper {
             Ok((
                 None,
                 Some(FastSyncStorageWrapper {
-                    temporary_db_with_genesis: secondary_db,
-                    db_for_fast_sync: Some(db_main),
+                    temporary_db_with_genesis: Arc::new(secondary_db),
+                    db_for_fast_sync: Arc::new(db_main),
                     fast_sync_status: Arc::new(RwLock::new(FastSyncStatus::UNKNOWN)),
                 }),
             ))
         } else {
             Ok((Some(db_main), None))
         }
+    }
+
+    pub fn get_fast_sync_db(&self) -> Arc<AptosDB> {
+        self.db_for_fast_sync.clone()
     }
 
     pub fn get_fast_sync_status(&self) -> Result<FastSyncStatus> {
@@ -134,169 +130,18 @@ impl FastSyncStorageWrapper {
 
     pub(crate) fn get_aptos_db_read_ref(&self) -> &AptosDB {
         if self.is_fast_sync_bootstrap_finished() {
-            self.db_for_fast_sync
-                .as_ref()
-                .expect("db_secondary is not initialized")
+            self.db_for_fast_sync.as_ref()
         } else {
-            &self.temporary_db_with_genesis
+            self.temporary_db_with_genesis.as_ref()
         }
     }
 
     pub(crate) fn get_aptos_db_write_ref(&self) -> &AptosDB {
         if self.is_fast_sync_bootstrap_started() || self.is_fast_sync_bootstrap_finished() {
-            self.db_for_fast_sync
-                .as_ref()
-                .expect("db_secondary is not initialized")
+            self.db_for_fast_sync.as_ref()
         } else {
-            &self.temporary_db_with_genesis
+            self.temporary_db_with_genesis.as_ref()
         }
-    }
-
-    /// Provide an iterator to underlying data for reading transactions
-    pub fn get_transaction_iter(
-        &self,
-        start_version: Version,
-        num_transactions: usize,
-    ) -> Result<
-        impl Iterator<Item = Result<(Transaction, TransactionInfo, Vec<ContractEvent>, WriteSet)>> + '_,
-    > {
-        let txn_iter = self
-            .get_aptos_db_read_ref()
-            .transaction_store
-            .get_transaction_iter(start_version, num_transactions)?;
-        let mut txn_info_iter = self
-            .get_aptos_db_read_ref()
-            .ledger_store
-            .get_transaction_info_iter(start_version, num_transactions)?;
-        let mut event_vec_iter = self
-            .get_aptos_db_read_ref()
-            .event_store
-            .get_events_by_version_iter(start_version, num_transactions)?;
-        let mut write_set_iter = self
-            .get_aptos_db_read_ref()
-            .transaction_store
-            .get_write_set_iter(start_version, num_transactions)?;
-
-        let zipped = txn_iter.enumerate().map(move |(idx, txn_res)| {
-            let version = start_version + idx as u64; // overflow is impossible since it's check upon txn_iter construction.
-
-            let txn = txn_res?;
-            let txn_info = txn_info_iter
-                .next()
-                .ok_or_else(|| anyhow!("TransactionInfo not found when Transaction exists."))
-                .context(version)??;
-            let event_vec = event_vec_iter
-                .next()
-                .ok_or_else(|| anyhow!("Events not found when Transaction exists."))
-                .context(version)??;
-            let write_set = write_set_iter
-                .next()
-                .ok_or_else(|| anyhow!("WriteSet not found when Transaction exists."))
-                .context(version)??;
-            BACKUP_TXN_VERSION.set(version as i64);
-            Ok((txn, txn_info, event_vec, write_set))
-        });
-        Ok(zipped)
-    }
-
-    /// Gets the proof for a transaction chunk.
-    /// N.B. the `LedgerInfo` returned will always be in the same epoch of the `last_version`.
-    pub fn get_transaction_range_proof(
-        &self,
-        first_version: Version,
-        last_version: Version,
-    ) -> Result<(TransactionAccumulatorRangeProof, LedgerInfoWithSignatures)> {
-        ensure!(
-            last_version >= first_version,
-            "Bad transaction range: [{}, {}]",
-            first_version,
-            last_version
-        );
-        let ledger_store = self.get_aptos_db_read_ref().ledger_store.clone();
-        let num_transactions = last_version - first_version + 1;
-        let epoch = ledger_store.get_epoch(last_version)?;
-        let ledger_info = ledger_store.get_latest_ledger_info_in_epoch(epoch)?;
-        let accumulator_proof = ledger_store.get_transaction_range_proof(
-            Some(first_version),
-            num_transactions,
-            ledger_info.ledger_info().version(),
-        )?;
-        Ok((accumulator_proof, ledger_info))
-    }
-
-    /// Gets an iterator which can yield all accounts in the state tree.
-    pub fn get_account_iter(
-        &self,
-        version: Version,
-    ) -> Result<Box<dyn Iterator<Item = Result<(StateKey, StateValue)>> + Send + Sync>> {
-        let iterator = self
-            .get_aptos_db_read_ref()
-            .state_store
-            .clone()
-            .get_state_key_and_value_iter(version, HashValue::zero())?
-            .enumerate()
-            .map(move |(idx, res)| {
-                BACKUP_STATE_SNAPSHOT_VERSION.set(version as i64);
-                BACKUP_STATE_SNAPSHOT_LEAF_IDX.set(idx as i64);
-                res
-            });
-        Ok(Box::new(iterator))
-    }
-
-    /// Gets the proof that proves a range of accounts.
-    pub fn get_account_state_range_proof(
-        &self,
-        rightmost_key: HashValue,
-        version: Version,
-    ) -> Result<SparseMerkleRangeProof> {
-        self.get_aptos_db_read_ref()
-            .state_store
-            .clone()
-            .get_value_range_proof(rightmost_key, version)
-    }
-
-    /// Gets the epoch, committed version, and synced version of the DB.
-    pub fn get_db_state(&self) -> Result<Option<DbState>> {
-        Ok(self
-            .get_aptos_db_read_ref()
-            .ledger_store
-            .clone()
-            .get_latest_ledger_info_option()
-            .map(|li| DbState {
-                epoch: li.ledger_info().epoch(),
-                committed_version: li.ledger_info().version(),
-            }))
-    }
-
-    /// Gets the proof of the state root at specified version.
-    /// N.B. the `LedgerInfo` returned will always be in the same epoch of the version.
-    pub fn get_state_root_proof(
-        &self,
-        version: Version,
-    ) -> Result<(TransactionInfoWithProof, LedgerInfoWithSignatures)> {
-        let ledger_store = self.get_aptos_db_read_ref().ledger_store.clone();
-        let epoch = ledger_store.get_epoch(version)?;
-        let ledger_info = ledger_store.get_latest_ledger_info_in_epoch(epoch)?;
-        let txn_info = ledger_store
-            .get_transaction_info_with_proof(version, ledger_info.ledger_info().version())?;
-
-        Ok((txn_info, ledger_info))
-    }
-
-    pub fn get_epoch_ending_ledger_info_iter(
-        &self,
-        start_epoch: u64,
-        end_epoch: u64,
-    ) -> Result<impl Iterator<Item = Result<LedgerInfoWithSignatures>> + '_> {
-        Ok(self
-            .get_aptos_db_read_ref()
-            .ledger_store
-            .get_epoch_ending_ledger_info_iter(start_epoch, end_epoch)?
-            .enumerate()
-            .map(move |(idx, li)| {
-                BACKUP_EPOCH_ENDING_EPOCH.set((start_epoch + idx as u64) as i64);
-                li
-            }))
     }
 }
 
@@ -381,7 +226,8 @@ impl DbWriter for FastSyncStorageWrapper {
 macro_rules! aptos_db_read_fn {
     ($(fn $name:ident(&self $(, $arg: ident : $ty: ty $(,)?)*) -> $return_type:ty,)+) => {
         $(fn $name(&self, $($arg: $ty),*) -> $return_type {
-            self.get_aptos_db_read_ref().$name($($arg),*)
+            let db_ref = self.get_aptos_db_read_ref();
+            db_ref.$name($($arg),*)
         })+
     };
 }
