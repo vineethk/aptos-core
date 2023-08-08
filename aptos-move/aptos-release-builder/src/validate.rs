@@ -7,6 +7,7 @@ use aptos::{
     common::types::CliCommand,
     governance::{ExecuteProposal, SubmitProposal, SubmitVote},
     move_tool::{RunFunction, RunScript},
+    stake::IncreaseLockup,
 };
 use aptos_api_types::U64;
 use aptos_crypto::ed25519::Ed25519PrivateKey;
@@ -355,6 +356,17 @@ impl NetworkConfig {
     }
 }
 
+async fn increase_lockup(validator_address: String, validator_key: String) -> Result<()> {
+    let args = vec![
+        "--private-key",
+        validator_key.as_str(),
+        "--sender-account",
+        validator_address.as_str(),
+        "--assume-yes",
+    ];
+    IncreaseLockup::parse_from(increase_lockup_args).await?;
+}
+
 async fn execute_release(
     release_config: ReleaseConfig,
     network_config: NetworkConfig,
@@ -370,6 +382,14 @@ async fn execute_release(
     };
     release_config.generate_release_proposal_scripts(proposal_folder)?;
 
+    // Increase lockup
+    increase_lockup(
+        network_config.validator_account,
+        network_config.validator_key,
+    )
+    .await?;
+
+    // Execute proposals
     for proposal in release_config.proposals {
         let mut proposal_path = proposal_folder.to_path_buf();
         proposal_path.push("sources");
