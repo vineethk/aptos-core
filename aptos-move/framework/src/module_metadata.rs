@@ -16,7 +16,10 @@ use move_core_types::{
 };
 use move_vm_runtime::move_vm::MoveVM;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, HashMap},
+};
 use thiserror::Error;
 
 /// The minimal file format version from which the V1 metadata is supported
@@ -132,13 +135,21 @@ impl KnownAttribute {
     }
 }
 
+thread_local!(static METADATA_CACHE: RefCell<HashMap<Vec<Metadata>, Option<RuntimeModuleMetadataV1>>> = RefCell::new(HashMap::new()));
+
 /// Extract metadata from the VM, upgrading V0 to V1 representation as needed
 pub fn get_metadata(md: &[Metadata]) -> Option<RuntimeModuleMetadataV1> {
-    if let Some(data) = md.iter().find(|md| md.key == APTOS_METADATA_KEY_V1) {
+    if let Some(result) = METADATA_CACHE.with(|cache| cache.borrow_mut().get(md).cloned()) {
+        return result;
+    };
+    let result = if let Some(data) = md.iter().find(|md| md.key == APTOS_METADATA_KEY_V1) {
         bcs::from_bytes::<RuntimeModuleMetadataV1>(&data.value).ok()
     } else {
         get_metadata_v0(md)
-    }
+    };
+
+    METADATA_CACHE.with(|cache| cache.borrow_mut().insert(md.to_vec(), result.clone()));
+    result
 }
 
 pub fn get_metadata_v0(md: &[Metadata]) -> Option<RuntimeModuleMetadataV1> {
