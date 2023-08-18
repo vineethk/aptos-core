@@ -5,7 +5,7 @@
 
 use crate::{
     db_metadata::{DbMetadataKey, DbMetadataSchema, DbMetadataValue},
-    ledger_db::LedgerDb,
+    ledger_db::{LedgerDb, LedgerDbSchemaBatches},
     schema::{
         epoch_by_version::EpochByVersionSchema, jellyfish_merkle_node::JellyfishMerkleNodeSchema,
         ledger_info::LedgerInfoSchema, stale_node_index::StaleNodeIndexSchema,
@@ -77,9 +77,8 @@ pub(crate) fn truncate_ledger_db(
         let start_version =
             std::cmp::max(current_version - batch_size as u64 + 1, target_version + 1);
         let end_version = current_version + 1;
-        // TODO(grao): Support splitted ledger DBs here.
         truncate_ledger_db_single_batch(
-            ledger_db.metadata_db(),
+            ledger_db.clone(),
             &event_store,
             &transaction_store,
             start_version,
@@ -232,13 +231,14 @@ pub(crate) fn num_frozen_nodes_in_accumulator(num_leaves: u64) -> u64 {
 }
 
 fn truncate_transaction_accumulator(
-    ledger_db: &DB,
+    transaction_accumulator_db: &DB,
     start_version: Version,
     end_version: Version,
     batch: &SchemaBatch,
 ) -> Result<()> {
     let num_frozen_nodes = num_frozen_nodes_in_accumulator(end_version);
-    let mut iter = ledger_db.iter::<TransactionAccumulatorSchema>(ReadOptions::default())?;
+    let mut iter =
+        transaction_accumulator_db.iter::<TransactionAccumulatorSchema>(ReadOptions::default())?;
     iter.seek_to_last();
     let (position, _) = iter.next().transpose()?.unwrap();
     assert_eq!(position.to_postorder_index() + 1, num_frozen_nodes);
@@ -262,23 +262,38 @@ fn truncate_transaction_accumulator(
 }
 
 fn truncate_ledger_db_single_batch(
-    ledger_db: &DB,
+    ledger_db: Arc<LedgerDb>,
     event_store: &EventStore,
     transaction_store: &TransactionStore,
     start_version: Version,
     end_version: Version,
 ) -> Result<()> {
-    let batch = SchemaBatch::new();
+    let batch = LedgerDbSchemaBatches::new();
 
-    delete_transaction_index_data(transaction_store, start_version, end_version, &batch)?;
-    delete_per_epoch_data(ledger_db, start_version, end_version, &batch)?;
+    delete_transaction_index_data(
+        transaction_store,
+        start_version,
+        end_version,
+        &batch.transaction_db_batches,
+    )?;
+    delete_per_epoch_data(
+        ledger_db.metadata_db(),
+        start_version,
+        end_version,
+        &batch.ledger_metadata_db_batches,
+    )?;
     delete_per_version_data(start_version, end_version, &batch)?;
 
-    event_store.prune_events(start_version, end_version, &batch)?;
+    event_store.prune_events(start_version, end_version, &batch.event_db_batches)?;
 
-    truncate_transaction_accumulator(ledger_db, start_version, end_version, &batch)?;
+    truncate_transaction_accumulator(
+        ledger_db.transaction_accumulator_db(),
+        start_version,
+        end_version,
+        &batch.transaction_accumulator_db_batches,
+    )?;
 
-    batch.put::<DbMetadataSchema>(
+    batch.ledger_metadata_db_batches.put::<DbMetadataSchema>(
         &DbMetadataKey::LedgerCommitProgress,
         &DbMetadataValue::Version(start_version - 1),
     )?;
@@ -332,13 +347,21 @@ fn delete_per_epoch_data(
 fn delete_per_version_data(
     start_version: Version,
     end_version: Version,
-    batch: &SchemaBatch,
+    batch: &LedgerDbSchemaBatches,
 ) -> Result<()> {
     for version in start_version..end_version {
-        batch.delete::<TransactionInfoSchema>(&version)?;
-        batch.delete::<TransactionSchema>(&version)?;
-        batch.delete::<VersionDataSchema>(&version)?;
-        batch.delete::<WriteSetSchema>(&version)?;
+        batch
+            .transaction_info_db_batches
+            .delete::<TransactionInfoSchema>(&version)?;
+        batch
+            .transaction_db_batches
+            .delete::<TransactionSchema>(&version)?;
+        batch
+            .ledger_metadata_db_batches
+            .delete::<VersionDataSchema>(&version)?;
+        batch
+            .write_set_db_batches
+            .delete::<WriteSetSchema>(&version)?;
     }
 
     Ok(())

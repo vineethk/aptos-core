@@ -656,24 +656,44 @@ impl StateMerkleDb {
     ) -> Result<Option<(NodeKey, LeafNode)>> {
         let mut ret = None;
 
-        // TODO(grao): Support sharding here.
         let mut iter = self
             .metadata_db()
             .iter::<JellyfishMerkleNodeSchema>(Default::default())?;
         iter.seek(&(version, 0)).unwrap();
-
-        while let Some((node_key, node)) = iter.next().transpose()? {
-            if let Node::Leaf(leaf_node) = node {
-                if node_key.version() != version {
-                    break;
+        match iter.next().transpose()? {
+            Some((node_key, node)) => {
+                if node.node_type() == NodeType::Null || node_key.version() != version {
+                    return Ok(None);
                 }
-                match ret {
-                    None => ret = Some((node_key, leaf_node)),
-                    Some(ref other) => {
-                        if leaf_node.account_key() > other.1.account_key() {
-                            ret = Some((node_key, leaf_node));
-                        }
-                    },
+            },
+            None => return Ok(None),
+        };
+
+        // traverse all shards in a naive way
+        // if sharding is not enable, we only need to search once.
+        let shards = self
+            .enable_sharding
+            .then(|| (0..NUM_STATE_SHARDS))
+            .unwrap_or(0..1);
+
+        for shard_id in shards.rev() {
+            let shard_db = self.state_merkle_db_shards[shard_id].clone();
+            let mut shard_iter = shard_db.iter::<JellyfishMerkleNodeSchema>(Default::default())?;
+            shard_iter.seek(&(version, 1)).unwrap();
+
+            while let Some((node_key, node)) = shard_iter.next().transpose()? {
+                if let Node::Leaf(leaf_node) = node {
+                    if node_key.version() != version {
+                        break;
+                    }
+                    match ret {
+                        None => ret = Some((node_key, leaf_node)),
+                        Some(ref other) => {
+                            if leaf_node.account_key() > other.1.account_key() {
+                                ret = Some((node_key, leaf_node));
+                            }
+                        },
+                    }
                 }
             }
         }
