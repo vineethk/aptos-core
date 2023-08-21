@@ -1,7 +1,10 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{db_debugger::common::DbDir, AptosDB};
+use crate::{
+    db_debugger::{common::DbDir, ShardingConfig},
+    AptosDB,
+};
 use anyhow::{ensure, Result};
 use clap::Parser;
 use std::{fs, path::PathBuf};
@@ -14,6 +17,9 @@ pub struct Cmd {
 
     #[clap(long, value_parser)]
     output_dir: PathBuf,
+
+    #[clap(flatten)]
+    sharding_config: ShardingConfig,
 }
 
 impl Cmd {
@@ -21,7 +27,11 @@ impl Cmd {
         ensure!(!self.output_dir.exists(), "Output dir already exists.");
         fs::create_dir_all(&self.output_dir)?;
 
-        // TODO(grao): Support sharded state merkle db and split_ledger_db here.
-        AptosDB::create_checkpoint(self.db_dir, self.output_dir, false, false)
+        AptosDB::create_checkpoint(
+            self.db_dir,
+            self.output_dir,
+            self.sharding_config.use_sharded_state_merkle_db,
+            self.sharding_config.split_ledger_db,
+        )
     }
 }

@@ -450,7 +450,7 @@ impl AptosDB {
         Ok((ledger_db, state_merkle_db, state_kv_db))
     }
 
-    fn open_indexer(
+    fn open_indexer(Ï
         &mut self,
         db_root_path: impl AsRef<Path>,
         rocksdb_config: RocksdbConfig,
@@ -525,7 +525,10 @@ impl AptosDB {
 
     /// This opens db with sharding enabled.
     #[cfg(any(test, feature = "fuzzing"))]
-    pub fn new_for_test_with_sharding<P: AsRef<Path> + Clone>(db_root_path: P) -> Self {
+    pub fn new_for_test_with_sharding<P: AsRef<Path> + Clone>(
+        db_root_path: P,
+        max_node_cache: usize,
+    ) -> Self {
         let db_config = RocksdbConfigs {
             use_sharded_state_merkle_db: true,
             split_ledger_db: true,
@@ -538,7 +541,7 @@ impl AptosDB {
             db_config,
             false,
             BUFFERED_STATE_TARGET_ITEMS,
-            DEFAULT_MAX_NUM_NODES_PER_LRU_CACHE_SHARD,
+            max_node_cache,
         )
         .expect("Unable to open AptosDB")
     }
