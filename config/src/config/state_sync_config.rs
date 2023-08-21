@@ -199,6 +199,9 @@ impl Default for StorageServiceConfig {
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DataStreamingServiceConfig {
+    /// Whether or not to enable data subscription streaming.
+    pub enable_subscription_streaming: bool,
+
     /// The interval (milliseconds) at which to refresh the global data summary.
     pub global_summary_refresh_interval_ms: u64,
 
@@ -221,6 +224,10 @@ pub struct DataStreamingServiceConfig {
     /// memory. Once the number grows beyond this value, garbage collection occurs.
     pub max_notification_id_mappings: u64,
 
+    /// Maxinum number of consecutive subscriptions that can be made before
+    /// the subscription stream is terminated and a new stream must be created.
+    pub max_num_consecutive_subscriptions: u64,
+
     /// The interval (milliseconds) at which to check the progress of each stream.
     pub progress_check_interval_ms: u64,
 }
@@ -228,12 +235,14 @@ pub struct DataStreamingServiceConfig {
 impl Default for DataStreamingServiceConfig {
     fn default() -> Self {
         Self {
+            enable_subscription_streaming: true, // TODO: change to false before landing!
             global_summary_refresh_interval_ms: 50,
             max_concurrent_requests: MAX_CONCURRENT_REQUESTS,
             max_concurrent_state_requests: MAX_CONCURRENT_STATE_REQUESTS,
             max_data_stream_channel_sizes: 300,
             max_request_retry: 5,
             max_notification_id_mappings: 300,
+            max_num_consecutive_subscriptions: 50,
             progress_check_interval_ms: 50,
         }
     }
@@ -268,6 +277,8 @@ pub struct AptosDataClientConfig {
     pub optimistic_fetch_timeout_ms: u64,
     /// First timeout (in ms) when waiting for a response
     pub response_timeout_ms: u64,
+    /// Timeout (in ms) when waiting for a subscription response
+    pub subscription_response_timeout_ms: u64,
     /// Interval (in ms) between data summary poll loop executions
     pub summary_poll_loop_interval_ms: u64,
     /// Whether or not to request compression for incoming data
@@ -291,6 +302,7 @@ impl Default for AptosDataClientConfig {
             optimistic_fetch_timeout_ms: 5000, // 5 seconds
             response_timeout_ms: 10_000,       // 10 seconds
             summary_poll_loop_interval_ms: 200,
+            subscription_response_timeout_ms: 20_000, // 20 seconds (must be longer than a regular timeout because of pre-fetching)
             use_compression: true,
         }
     }
