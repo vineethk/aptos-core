@@ -396,7 +396,7 @@ impl StateStore {
                 if crash_if_difference_is_too_large {
                     assert_le!(difference, MAX_COMMIT_PROGRESS_DIFFERENCE);
                 }
-                // TODO(grao): Support truncation for splitted ledger DBs.
+
                 truncate_ledger_db(
                     ledger_db,
                     ledger_commit_progress,

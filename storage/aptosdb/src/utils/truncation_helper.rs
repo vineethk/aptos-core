@@ -293,10 +293,13 @@ fn truncate_ledger_db_single_batch(
         &batch.transaction_accumulator_db_batches,
     )?;
 
-    batch.ledger_metadata_db_batches.put::<DbMetadataSchema>(
+    let progress_batch = SchemaBatch::new();
+    progress_batch.put::<DbMetadataSchema>(
         &DbMetadataKey::LedgerCommitProgress,
         &DbMetadataValue::Version(start_version - 1),
     )?;
+    ledger_db.metadata_db().write_schemas(progress_batch);
+
     ledger_db.write_schemas(batch)
 }
 

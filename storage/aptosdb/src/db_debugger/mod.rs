@@ -12,7 +12,7 @@ use anyhow::Result;
 use clap::Parser;
 
 #[derive(Parser, Clone)]
-struct ShardingConfig {
+pub struct ShardingConfig {
     #[clap(long)]
     split_ledger_db: bool,
     #[clap(long)]

@@ -14,13 +14,13 @@ use std::path::{Path, PathBuf};
 
 pub const PAGE_SIZE: usize = 10;
 
-#[derive(Parser)]
+#[derive(Parser, Clone)]
 pub struct DbDir {
     #[clap(long, value_parser)]
     db_dir: PathBuf,
 
     #[clap(flatten)]
-    sharding_config: ShardingConfig,
+    pub sharding_config: ShardingConfig,
 }
 
 impl DbDir {

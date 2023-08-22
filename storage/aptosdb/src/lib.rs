@@ -44,7 +44,12 @@ pub mod db_debugger;
 use crate::{
     backup::{backup_handler::BackupHandler, restore_handler::RestoreHandler, restore_utils},
     db_metadata::{DbMetadataKey, DbMetadataSchema, DbMetadataValue},
-    db_options::{ledger_db_column_families, state_merkle_db_column_families},
+    db_options::{
+        event_db_column_families, ledger_db_column_families, ledger_metadata_db_column_families,
+        state_kv_db_column_families, state_merkle_db_column_families,
+        transaction_accumulator_db_column_families, transaction_db_column_families,
+        transaction_info_db_column_families, write_set_db_column_families,
+    },
     errors::AptosDbError,
     event_store::EventStore,
     ledger_db::{LedgerDb, LedgerDbSchemaBatches},
@@ -198,27 +203,66 @@ fn error_if_too_many_requested(num_requested: u64, max_allowed: u64) -> Result<(
     }
 }
 
-fn update_rocksdb_properties(ledger_rocksdb: &DB, state_merkle_db: &StateMerkleDb) -> Result<()> {
+fn update_rocksdb_properties(
+    ledger_db: &LedgerDb,
+    state_merkle_db: &StateMerkleDb,
+    state_kv_db: &StateKvDb,
+) -> Result<()> {
     let _timer = OTHER_TIMERS_SECONDS
         .with_label_values(&["update_rocksdb_properties"])
         .start_timer();
-    for cf_name in ledger_db_column_families() {
+
+    let set_property_fn = |cf_name: &str, db: &DB| -> Result<()> {
         for (rockdb_property_name, aptos_rocksdb_property_name) in &*ROCKSDB_PROPERTY_MAP {
             ROCKSDB_PROPERTIES
                 .with_label_values(&[cf_name, aptos_rocksdb_property_name])
-                .set(ledger_rocksdb.get_property(cf_name, rockdb_property_name)? as i64);
+                .set(db.get_property(cf_name, rockdb_property_name)? as i64);
+        }
+        Ok(())
+    };
+
+    let split_ledger = state_kv_db.enabled_sharding();
+
+    if split_ledger {
+        for cf in ledger_metadata_db_column_families() {
+            set_property_fn(cf, ledger_db.metadata_db())?;
+        }
+
+        for cf in write_set_db_column_families() {
+            set_property_fn(cf, ledger_db.write_set_db())?;
+        }
+
+        for cf in transaction_info_db_column_families() {
+            set_property_fn(cf, ledger_db.transaction_info_db())?;
+        }
+
+        for cf in transaction_db_column_families() {
+            set_property_fn(cf, ledger_db.transaction_db())?;
+        }
+
+        for cf in event_db_column_families() {
+            set_property_fn(cf, ledger_db.event_db())?;
+        }
+
+        for cf in transaction_accumulator_db_column_families() {
+            set_property_fn(cf, ledger_db.transaction_accumulator_db())?;
+        }
+
+        for cf in state_kv_db_column_families() {
+            set_property_fn(cf, state_kv_db.metadata_db())?;
+        }
+    } else {
+        for cf in ledger_db_column_families() {
+            set_property_fn(cf, ledger_db.metadata_db())?;
         }
     }
+
     for cf_name in state_merkle_db_column_families() {
-        for (rockdb_property_name, aptos_rocksdb_property_name) in &*ROCKSDB_PROPERTY_MAP {
-            // TODO(grao): Support sharding here.
-            ROCKSDB_PROPERTIES
-                .with_label_values(&[cf_name, aptos_rocksdb_property_name])
-                .set(
-                    state_merkle_db
-                        .metadata_db()
-                        .get_property(cf_name, rockdb_property_name)? as i64,
-                );
+        set_property_fn(cf_name, state_merkle_db.metadata_db())?;
+        if state_merkle_db.sharding_enabled() {
+            for shard in 0..NUM_STATE_SHARDS {
+                set_property_fn(cf_name, state_merkle_db.db_shard(shard as u8))?;
+            }
         }
     }
     Ok(())
@@ -231,10 +275,14 @@ struct RocksdbPropertyReporter {
 }
 
 impl RocksdbPropertyReporter {
-    fn new(ledger_rocksdb: Arc<DB>, state_merkle_rocksdb: Arc<StateMerkleDb>) -> Self {
+    fn new(
+        ledger_db: Arc<LedgerDb>,
+        state_merkle_db: Arc<StateMerkleDb>,
+        state_kv_db: Arc<StateKvDb>,
+    ) -> Self {
         let (send, recv) = mpsc::channel();
         let join_handle = Some(thread::spawn(move || loop {
-            if let Err(e) = update_rocksdb_properties(&ledger_rocksdb, &state_merkle_rocksdb) {
+            if let Err(e) = update_rocksdb_properties(&ledger_db, &state_merkle_db, &state_kv_db) {
                 warn!(
                     error = ?e,
                     "Updating rocksdb property failed."
@@ -334,10 +382,10 @@ impl AptosDB {
             state_store,
             transaction_store: Arc::new(TransactionStore::new(Arc::clone(&ledger_db))),
             ledger_pruner,
-            // TODO(grao): Include other DBs.
             _rocksdb_property_reporter: RocksdbPropertyReporter::new(
-                ledger_db.metadata_db_arc(),
-                Arc::clone(&state_merkle_db),
+                ledger_db,
+                state_merkle_db,
+                state_kv_db,
             ),
             ledger_commit_lock: std::sync::Mutex::new(()),
             indexer: None,
@@ -450,7 +498,7 @@ impl AptosDB {
         Ok((ledger_db, state_merkle_db, state_kv_db))
     }
 
-    fn open_indexer(Ï
+    fn open_indexer(
         &mut self,
         db_root_path: impl AsRef<Path>,
         rocksdb_config: RocksdbConfig,
@@ -595,11 +643,6 @@ impl AptosDB {
     #[cfg(any(test, feature = "fuzzing"))]
     pub fn buffered_state(&self) -> &Mutex<BufferedState> {
         self.state_store.buffered_state()
-    }
-
-    /// This force the db to update rocksdb properties immediately.
-    pub fn update_rocksdb_properties(&self) -> Result<()> {
-        update_rocksdb_properties(&self.ledger_db.metadata_db_arc(), &self.state_merkle_db)
     }
 
     /// Returns ledger infos reflecting epoch bumps starting with the given epoch. If there are no

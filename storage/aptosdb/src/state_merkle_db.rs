@@ -679,6 +679,7 @@ impl StateMerkleDb {
         for shard_id in shards.rev() {
             let shard_db = self.state_merkle_db_shards[shard_id].clone();
             let mut shard_iter = shard_db.iter::<JellyfishMerkleNodeSchema>(Default::default())?;
+            // DB sharded only contain nodes with num_of_nibbles >= 1
             shard_iter.seek(&(version, 1)).unwrap();
 
             while let Some((node_key, node)) = shard_iter.next().transpose()? {

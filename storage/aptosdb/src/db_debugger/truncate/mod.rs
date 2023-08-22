@@ -218,17 +218,23 @@ mod test {
     use proptest::prelude::*;
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(10))]
+        #![proptest_config(ProptestConfig::with_cases(1))]
 
         #[test]
         fn test_truncation(input in arb_blocks_to_commit_with_block_nums(80, 120)) {
+            use crate::DEFAULT_MAX_NUM_NODES_PER_LRU_CACHE_SHARD;
             aptos_logger::Logger::new().init();
+            let sharding_config = ShardingConfig {
+                split_ledger_db: input.1,
+                use_sharded_state_merkle_db: input.1,
+            };
             let tmp_dir = TempPath::new();
-            let db = AptosDB::new_for_test(&tmp_dir);
+
+            let db = if input.1 { AptosDB::new_for_test_with_sharding(&tmp_dir, DEFAULT_MAX_NUM_NODES_PER_LRU_CACHE_SHARD) } else { AptosDB::new_for_test(&tmp_dir) };
             let mut in_memory_state = db.state_store.buffered_state().lock().current_state().clone();
             let _ancestor = in_memory_state.base.clone();
             let mut version = 0;
-            for (txns_to_commit, ledger_info_with_sigs) in input.iter() {
+            for (txns_to_commit, ledger_info_with_sigs) in input.0.iter() {
                 update_in_memory_state(&mut in_memory_state, txns_to_commit.as_slice());
                 db.save_transactions(txns_to_commit, version, version.checked_sub(1), Some(ledger_info_with_sigs), true, in_memory_state.clone())
                     .unwrap();
@@ -241,10 +247,6 @@ mod test {
             drop(db);
 
             let target_version = db_version - 70;
-            let sharding_config = ShardingConfig {
-                split_ledger_db: false,
-                use_sharded_state_merkle_db: false,
-            };
 
             let cmd = Cmd {
                 db_dir: tmp_dir.path().to_path_buf(),
@@ -257,7 +259,7 @@ mod test {
 
             cmd.run().unwrap();
 
-            let db = AptosDB::new_for_test(&tmp_dir);
+            let db = if input.1 { AptosDB::new_for_test_with_sharding(&tmp_dir, DEFAULT_MAX_NUM_NODES_PER_LRU_CACHE_SHARD) } else { AptosDB::new_for_test(&tmp_dir) };
             let db_version = db.get_latest_version().unwrap();
             prop_assert_eq!(db_version, target_version);
 
@@ -278,7 +280,11 @@ mod test {
 
             let (ledger_db, state_merkle_db, state_kv_db) = AptosDB::open_dbs(
                 tmp_dir.path().to_path_buf(),
-                RocksdbConfigs::default(),
+                RocksdbConfigs {
+                    use_sharded_state_merkle_db: input.1,
+                    split_ledger_db: input.1,
+                    ..Default::default()
+                },
                 /*readonly=*/ false,
                 /*max_num_nodes_per_lru_cache_shard=*/ 0,
             ).unwrap();

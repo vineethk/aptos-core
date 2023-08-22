@@ -1,10 +1,7 @@
 // Copyright © Aptos Foundation
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::{
-    db_debugger::{common::DbDir, ShardingConfig},
-    AptosDB,
-};
+use crate::{db_debugger::common::DbDir, AptosDB};
 use anyhow::{ensure, Result};
 use clap::Parser;
 use std::{fs, path::PathBuf};
@@ -17,9 +14,6 @@ pub struct Cmd {
 
     #[clap(long, value_parser)]
     output_dir: PathBuf,
-
-    #[clap(flatten)]
-    sharding_config: ShardingConfig,
 }
 
 impl Cmd {
@@ -28,10 +22,10 @@ impl Cmd {
         fs::create_dir_all(&self.output_dir)?;
 
         AptosDB::create_checkpoint(
-            self.db_dir,
+            self.db_dir.clone(),
             self.output_dir,
-            self.sharding_config.use_sharded_state_merkle_db,
-            self.sharding_config.split_ledger_db,
+            self.db_dir.sharding_config.use_sharded_state_merkle_db,
+            self.db_dir.sharding_config.split_ledger_db,
         )
     }
 }
