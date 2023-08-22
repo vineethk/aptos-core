@@ -35,6 +35,8 @@ runs:
       shell: bash
       env:
         INDEXER_DATABASE_URL: postgresql://postgres@localhost/postgres
+        # This is until the issue in 1.71.1 is fixed and we can use the default toolchain again.
+        RUSTUP_TOOLCHAIN: beta
 
     # We always try to create the artifact, but it only creates on flaky or failed smoke tests -- when the directories are empty.
     - name: Upload smoke test logs for failed and flaky tests
