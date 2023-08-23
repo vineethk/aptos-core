@@ -16,7 +16,7 @@ use move_binary_format::{
     file_format::{
         AbilitySet, Bytecode, CompiledModule, CompiledScript, Constant, ConstantPoolIndex,
         FieldHandleIndex, FieldInstantiationIndex, FunctionDefinition, FunctionDefinitionIndex,
-        FunctionHandleIndex, FunctionInstantiationIndex, Signature, SignatureIndex, SignatureToken,
+        FunctionHandleIndex, FunctionInstantiationIndex, Signature, SignatureIndex,
         StructDefInstantiationIndex, StructDefinition, StructDefinitionIndex,
         StructFieldInformation, TableIndex, TypeParameterIndex, Visibility,
     },
@@ -172,6 +172,7 @@ impl ModuleCache {
         &self,
         module: &CompiledModule,
         struct_def: &StructDefinition,
+        struct_name_table: &[Arc<StructName>],
     ) -> PartialVMResult<StructType> {
         let struct_handle = module.struct_handle_at(struct_def.struct_handle);
         let field_names = match &struct_def.field_information {
@@ -191,7 +192,11 @@ impl ModuleCache {
 
         let mut field_tys = vec![];
         for field in fields {
-            let ty = self.make_type_while_loading(module, &field.signature.0)?;
+            let ty = make_type_internal(
+                BinaryIndexedView::Module(module),
+                &field.signature.0,
+                struct_name_table,
+            )?;
             debug_assert!(field_tys.len() < usize::max_value());
             field_tys.push(ty);
         }
@@ -211,22 +216,6 @@ impl ModuleCache {
                 module: module.self_id(),
             }),
         })
-    }
-
-    // `make_type` is the entry point to "translate" a `SignatureToken` to a `Type`
-    fn make_type(&self, module: BinaryIndexedView, tok: &SignatureToken) -> PartialVMResult<Type> {
-        make_type_internal(module, tok)
-    }
-
-    // While in the process of loading, and before a `Module` is saved into the cache the loader
-    // needs to resolve type references to the module itself (self) "manually"; that is,
-    // looping through the types of the module itself
-    fn make_type_while_loading(
-        &self,
-        module: &CompiledModule,
-        tok: &SignatureToken,
-    ) -> PartialVMResult<Type> {
-        make_type_internal(BinaryIndexedView::Module(module), tok)
     }
 
     // Given a module id, returns whether the module cache has the module or not
@@ -1756,13 +1745,14 @@ impl Module {
         let mut single_signature_token_map = BTreeMap::new();
 
         let mut create = || {
+            let mut struct_names = vec![];
             // validate the correctness of struct handle references.
             for struct_handle in module.struct_handles() {
+                let struct_name = module.identifier_at(struct_handle.name);
                 let module_handle = module.module_handle_at(struct_handle.module);
+                let module_id = module.module_id_for_handle(module_handle);
+
                 if module_handle != module.self_handle() {
-                    let struct_name = module.identifier_at(struct_handle.name);
-                    let module_handle = module.module_handle_at(struct_handle.module);
-                    let module_id = module.module_id_for_handle(module_handle);
                     let struct_ = cache.resolve_struct_by_name(struct_name, &module_id)?;
                     if !struct_handle.abilities.is_subset(struct_.abilities)
                         || &struct_handle
@@ -1778,10 +1768,15 @@ impl Module {
                         .with_message("Ability definition of module mismatch".to_string()));
                     }
                 }
+                struct_names.push(Arc::new(StructName {
+                    module: module_id,
+                    name: struct_name.to_owned(),
+                }))
             }
 
             for (idx, struct_def) in module.struct_defs().iter().enumerate() {
-                let definition_struct_type = Arc::new(cache.make_struct_type(&module, struct_def)?);
+                let definition_struct_type =
+                    Arc::new(cache.make_struct_type(&module, struct_def, &struct_names)?);
                 structs.push(StructDef {
                     field_count: definition_struct_type.fields.len() as u16,
                     definition_struct_type,
@@ -1797,7 +1792,11 @@ impl Module {
                 let field_count = struct_def.field_count;
                 let mut instantiation = vec![];
                 for ty in &module.signature_at(struct_inst.type_parameters).0 {
-                    instantiation.push(cache.make_type_while_loading(&module, ty)?);
+                    instantiation.push(make_type_internal(
+                        BinaryIndexedView::Module(&module),
+                        ty,
+                        &struct_names,
+                    )?);
                 }
                 struct_instantiations.push(StructInstantiation {
                     field_count,
@@ -1813,19 +1812,25 @@ impl Module {
                     .return_
                     .0
                     .iter()
-                    .map(|tok| cache.make_type_while_loading(&module, tok))
+                    .map(|tok| {
+                        make_type_internal(BinaryIndexedView::Module(&module), tok, &struct_names)
+                    })
                     .collect::<PartialVMResult<Vec<_>>>()?;
                 function.local_types = function
                     .locals
                     .0
                     .iter()
-                    .map(|tok| cache.make_type_while_loading(&module, tok))
+                    .map(|tok| {
+                        make_type_internal(BinaryIndexedView::Module(&module), tok, &struct_names)
+                    })
                     .collect::<PartialVMResult<Vec<_>>>()?;
                 function.parameter_types = function
                     .parameters
                     .0
                     .iter()
-                    .map(|tok| cache.make_type_while_loading(&module, tok))
+                    .map(|tok| {
+                        make_type_internal(BinaryIndexedView::Module(&module), tok, &struct_names)
+                    })
                     .collect::<PartialVMResult<Vec<_>>>()?;
 
                 function_map.insert(function.name.to_owned(), idx);
@@ -1856,8 +1861,14 @@ impl Module {
                                         },
                                         Some(sig_token) => sig_token,
                                     };
-                                    single_signature_token_map
-                                        .insert(*si, cache.make_type_while_loading(&module, ty)?);
+                                    single_signature_token_map.insert(
+                                        *si,
+                                        make_type_internal(
+                                            BinaryIndexedView::Module(&module),
+                                            ty,
+                                            &struct_names,
+                                        )?,
+                                    );
                                 }
                             },
                             _ => {},
@@ -1892,7 +1903,11 @@ impl Module {
                 let handle = function_refs[func_inst.handle.0 as usize].clone();
                 let mut instantiation = vec![];
                 for ty in &module.signature_at(func_inst.type_parameters).0 {
-                    instantiation.push(cache.make_type_while_loading(&module, ty)?);
+                    instantiation.push(make_type_internal(
+                        BinaryIndexedView::Module(&module),
+                        ty,
+                        &struct_names,
+                    )?);
                 }
                 function_instantiations.push(FunctionInstantiation {
                     handle,
@@ -1917,7 +1932,11 @@ impl Module {
                 let mut instantiation = vec![];
                 let owner_struct_def = &structs[module.field_handle_at(fh_idx).owner.0 as usize];
                 for ty in &module.signature_at(f_inst.type_parameters).0 {
-                    instantiation.push(cache.make_type_while_loading(&module, ty)?);
+                    instantiation.push(make_type_internal(
+                        BinaryIndexedView::Module(&module),
+                        ty,
+                        &struct_names,
+                    )?);
                 }
                 field_instantiations.push(FieldInstantiation {
                     offset,
@@ -2026,6 +2045,7 @@ impl Script {
         script_hash: &ScriptHash,
         cache: &ModuleCache,
     ) -> VMResult<Self> {
+        let mut struct_names = vec![];
         for struct_handle in script.struct_handles() {
             let struct_name = script.identifier_at(struct_handle.name);
             let module_handle = script.module_handle_at(struct_handle.module);
@@ -2047,6 +2067,10 @@ impl Script {
                         .finish(Location::Script),
                 );
             }
+            struct_names.push(Arc::new(StructName {
+                module: module_id,
+                name: struct_name.to_owned(),
+            }));
         }
 
         let mut function_refs = vec![];
@@ -2069,8 +2093,7 @@ impl Script {
             let mut instantiation = vec![];
             for ty in &script.signature_at(func_inst.type_parameters).0 {
                 instantiation.push(
-                    cache
-                        .make_type(BinaryIndexedView::Script(&script), ty)
+                    make_type_internal(BinaryIndexedView::Script(&script), ty, &struct_names)
                         .map_err(|e| e.finish(Location::Script))?,
                 );
             }
@@ -2088,7 +2111,7 @@ impl Script {
         let parameter_tys = parameters
             .0
             .iter()
-            .map(|tok| cache.make_type(BinaryIndexedView::Script(&script), tok))
+            .map(|tok| make_type_internal(BinaryIndexedView::Script(&script), tok, &struct_names))
             .collect::<PartialVMResult<Vec<_>>>()
             .map_err(|err| err.finish(Location::Undefined))?;
         let locals = Signature(
@@ -2102,14 +2125,14 @@ impl Script {
         let local_tys = locals
             .0
             .iter()
-            .map(|tok| cache.make_type(BinaryIndexedView::Script(&script), tok))
+            .map(|tok| make_type_internal(BinaryIndexedView::Script(&script), tok, &struct_names))
             .collect::<PartialVMResult<Vec<_>>>()
             .map_err(|err| err.finish(Location::Undefined))?;
         let return_ = Signature(vec![]);
         let return_tys = return_
             .0
             .iter()
-            .map(|tok| cache.make_type(BinaryIndexedView::Script(&script), tok))
+            .map(|tok| make_type_internal(BinaryIndexedView::Script(&script), tok, &struct_names))
             .collect::<PartialVMResult<Vec<_>>>()
             .map_err(|err| err.finish(Location::Undefined))?;
         let type_parameters = script.type_parameters.clone();
@@ -2162,9 +2185,12 @@ impl Script {
                         };
                         single_signature_token_map.insert(
                             *si,
-                            cache
-                                .make_type(BinaryIndexedView::Script(&script), ty)
-                                .map_err(|e| e.finish(Location::Script))?,
+                            make_type_internal(
+                                BinaryIndexedView::Script(&script),
+                                ty,
+                                &struct_names,
+                            )
+                            .map_err(|e| e.finish(Location::Script))?,
                         );
                     }
                 },
@@ -2579,12 +2605,14 @@ impl Loader {
             Type::Address => TypeTag::Address,
             Type::Signer => TypeTag::Signer,
             Type::Vector(ty) => TypeTag::Vector(Box::new(self.type_to_type_tag(ty)?)),
-            Type::Struct { name, .. } => {
-                TypeTag::Struct(Box::new(self.struct_name_to_type_tag(name, &[], gas_context)?))
-            },
-            Type::StructInstantiation { name, ty_args, .. } => {
-                TypeTag::Struct(Box::new(self.struct_name_to_type_tag(name, ty_args, gas_context)?))
-            },
+            Type::Struct { name, .. } => TypeTag::Struct(Box::new(self.struct_name_to_type_tag(
+                name,
+                &[],
+                gas_context,
+            )?)),
+            Type::StructInstantiation { name, ty_args, .. } => TypeTag::Struct(Box::new(
+                self.struct_name_to_type_tag(name, ty_args, gas_context)?,
+            )),
             Type::Reference(_) | Type::MutableReference(_) | Type::TyParam(_) => {
                 return Err(
                     PartialVMError::new(StatusCode::UNKNOWN_INVARIANT_VIOLATION_ERROR)
