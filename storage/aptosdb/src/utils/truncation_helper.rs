@@ -298,7 +298,7 @@ fn truncate_ledger_db_single_batch(
         &DbMetadataKey::LedgerCommitProgress,
         &DbMetadataValue::Version(start_version - 1),
     )?;
-    ledger_db.metadata_db().write_schemas(progress_batch);
+    ledger_db.metadata_db().write_schemas(progress_batch)?;
 
     ledger_db.write_schemas(batch)
 }

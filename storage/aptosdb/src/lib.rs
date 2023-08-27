@@ -221,6 +221,9 @@ fn update_rocksdb_properties(
         Ok(())
     };
 
+    let gen_shard_cf_name =
+        |cf_name: &str, shard_id: u8| -> String { format!("shard_{}_{}", shard_id, cf_name) };
+
     let split_ledger = state_kv_db.enabled_sharding();
 
     if split_ledger {
@@ -250,6 +253,14 @@ fn update_rocksdb_properties(
 
         for cf in state_kv_db_column_families() {
             set_property_fn(cf, state_kv_db.metadata_db())?;
+            if state_kv_db.enabled_sharding() {
+                for shard in 0..NUM_STATE_SHARDS {
+                    set_property_fn(
+                        gen_shard_cf_name(cf, shard as u8).as_str(),
+                        state_kv_db.db_shard(shard as u8),
+                    )?;
+                }
+            }
         }
     } else {
         for cf in ledger_db_column_families() {
@@ -261,7 +272,10 @@ fn update_rocksdb_properties(
         set_property_fn(cf_name, state_merkle_db.metadata_db())?;
         if state_merkle_db.sharding_enabled() {
             for shard in 0..NUM_STATE_SHARDS {
-                set_property_fn(cf_name, state_merkle_db.db_shard(shard as u8))?;
+                set_property_fn(
+                    gen_shard_cf_name(cf_name, shard as u8).as_str(),
+                    state_merkle_db.db_shard(shard as u8),
+                )?;
             }
         }
     }

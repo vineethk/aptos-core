@@ -20,12 +20,12 @@ impl Cmd {
     pub fn run(self) -> Result<()> {
         ensure!(!self.output_dir.exists(), "Output dir already exists.");
         fs::create_dir_all(&self.output_dir)?;
-
+        let sharding_config = self.db_dir.sharding_config.clone();
         AptosDB::create_checkpoint(
-            self.db_dir.clone(),
+            self.db_dir,
             self.output_dir,
-            self.db_dir.sharding_config.use_sharded_state_merkle_db,
-            self.db_dir.sharding_config.split_ledger_db,
+            sharding_config.use_sharded_state_merkle_db,
+            sharding_config.split_ledger_db,
         )
     }
 }
