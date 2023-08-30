@@ -3,22 +3,19 @@
 
 //! This file implements traits for ECDSA signatures over NIST-P256.
 
+use super::P256_SIGNATURE_LENGTH;
 use crate::{
-    p256::{P256PrivateKey, P256PublicKey, ORDER_HALF, ORDER_MINUS_ONE},
     hash::CryptoHash,
+    p256::{P256PrivateKey, P256PublicKey, ORDER_HALF, ORDER_MINUS_ONE},
     traits::*,
 };
 use anyhow::{anyhow, Result};
 use aptos_crypto_derive::{DeserializeKey, SerializeKey};
 use core::convert::TryFrom;
+use p256::{elliptic_curve::Curve, NistP256, NonZeroScalar};
 use serde::Serialize;
-use std::{cmp::Ordering, fmt};
 use signature::Verifier;
-use p256::NonZeroScalar;
-use p256::NistP256;
-use p256::elliptic_curve::Curve;
-
-use super::P256_SIGNATURE_LENGTH;
+use std::{cmp::Ordering, fmt};
 
 /// A P256 signature
 #[derive(DeserializeKey, Clone, SerializeKey)]
@@ -88,10 +85,10 @@ impl P256Signature {
 
     /// If the signature {R,S} does not have S < n/2 where n is the Ristretto255 order, return
     /// {R,n-S} as the canonical encoding of this signature to prevent malleability attacks. See
-    /// `check_s_malleability` for more detail 
+    /// `check_s_malleability` for more detail
     pub fn make_canonical(&self) -> P256Signature {
         if P256Signature::check_s_malleability(&self.to_bytes()[..]).is_ok() {
-            return self.clone()
+            return self.clone();
         };
         let s = self.0.s();
         let r = self.0.r();
@@ -133,7 +130,11 @@ impl Signature for P256Signature {
     fn verify_arbitrary_msg(&self, message: &[u8], public_key: &P256PublicKey) -> Result<()> {
         P256Signature::check_s_malleability(&self.to_bytes())?;
 
-        public_key.0.verify(message, &self.0).map_err(|e| anyhow!("{}", e)).and(Ok(()))
+        public_key
+            .0
+            .verify(message, &self.0)
+            .map_err(|e| anyhow!("{}", e))
+            .and(Ok(()))
     }
 
     fn to_bytes(&self) -> Vec<u8> {

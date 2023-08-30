@@ -6,14 +6,13 @@
 #[cfg(any(test, feature = "fuzzing"))]
 use crate::test_utils::{self, KeyPair};
 use crate::{
-    p256::{P256Signature, P256_PRIVATE_KEY_LENGTH, P256_PUBLIC_KEY_LENGTH},
     hash::CryptoHash,
+    p256::{P256Signature, P256_PRIVATE_KEY_LENGTH, P256_PUBLIC_KEY_LENGTH},
     traits::*,
 };
-use p256::ecdsa::signature::Signer;
-use p256;
 use aptos_crypto_derive::{DeserializeKey, SerializeKey, SilentDebug, SilentDisplay};
 use core::convert::TryFrom;
+use p256::{self, ecdsa::signature::Signer};
 #[cfg(any(test, feature = "fuzzing"))]
 use proptest::prelude::*;
 use serde::Serialize;
@@ -122,7 +121,7 @@ impl SigningKey for P256PrivateKey {
 impl Uniform for P256PrivateKey {
     fn generate<R>(rng: &mut R) -> Self
     where
-       R: ::rand::RngCore + ::rand::CryptoRng + ::rand_core::CryptoRng + ::rand_core::RngCore,
+        R: ::rand::RngCore + ::rand::CryptoRng + ::rand_core::CryptoRng + ::rand_core::RngCore,
     {
         let mut bytes: [u8; P256_PRIVATE_KEY_LENGTH] = Default::default();
         rng.fill_bytes(&mut bytes);
