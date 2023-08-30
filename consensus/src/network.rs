@@ -323,7 +323,7 @@ impl NetworkSender {
         self.send(msg, recipients).await
     }
 
-    pub async fn send_epoch_change(&mut self, proof: EpochChangeProof) {
+    pub async fn send_epoch_change(&self, proof: EpochChangeProof) {
         fail_point!("consensus::send::epoch_change", |_| ());
         let msg = ConsensusMsg::EpochChangeProof(Box::new(proof));
         self.send(msg, vec![self.author]).await
@@ -458,6 +458,15 @@ impl TDAGNetworkSender for DAGNetworkSenderImpl {
             sender,
             self.time_service.clone(),
         )
+    }
+
+    async fn send_epoch_change(&self, proof: EpochChangeProof) {
+        self.sender.send_epoch_change(proof).await
+    }
+
+    /// Sends the ledger info to self buffer manager
+    async fn send_commit_proof(&self, ledger_info: LedgerInfoWithSignatures) {
+        self.sender.send_commit_proof(ledger_info).await
     }
 }
 
