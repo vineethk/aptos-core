@@ -15,11 +15,12 @@ pub mod hash;
 pub mod hkdf;
 pub mod multi_ed25519;
 pub mod noise;
+pub mod p256;
 pub mod test_utils;
 pub mod traits;
 pub mod validatable;
+pub mod webauthn;
 pub mod x25519;
-pub mod p256;
 
 #[cfg(test)]
 mod unit_tests;
