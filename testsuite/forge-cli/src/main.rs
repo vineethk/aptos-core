@@ -569,8 +569,8 @@ fn single_test_suite(
         "state_sync_failures_catching_up" => state_sync_failures_catching_up(),
         "twin_validator_test" => twin_validator_test(),
         "large_db_simple_test" => large_db_simple_test(),
-        "consensus_only_perf_benchmark" => run_consensus_only_perf_test(),
-        "consensus_only_three_region_simulation" => run_consensus_only_three_region_simulation(),
+        // "consensus_only_perf_benchmark" => run_consensus_only_perf_test(),
+        "consensus_only_perf_benchmark" => run_consensus_only_realistic_env_max_tps(),
         "quorum_store_reconfig_enable_test" => quorum_store_reconfig_enable_test(),
         "mainnet_like_simulation_test" => mainnet_like_simulation_test(),
         "multiregion_benchmark_test" => multiregion_benchmark_test(),
@@ -594,15 +594,18 @@ fn wrap_with_realistic_env<T: NetworkTest + 'static>(test: T) -> CompositeNetwor
     )
 }
 
-fn run_consensus_only_three_region_simulation() -> ForgeConfig {
+fn run_consensus_only_realistic_env_max_tps() -> ForgeConfig {
     ForgeConfig::default()
         .with_initial_validator_count(NonZeroUsize::new(20).unwrap())
         .with_emit_job(
             EmitJobRequest::default()
-                .mode(EmitJobMode::ConstTps { tps: 30000 })
+                .mode(EmitJobMode::MaxLoad { mempool_backlog: 300000 })
                 .txn_expiration_time_secs(5 * 60),
         )
-        .add_network_test(ThreeRegionSameCloudSimulationTest)
+        .add_network_test(CompositeNetworkTest::new(
+            MultiRegionNetworkEmulationTest::default(),
+            CpuChaosTest::default(),
+        ))
         .with_genesis_helm_config_fn(Arc::new(|helm_values| {
             // no epoch change.
             helm_values["chain"]["epoch_duration_secs"] = (24 * 3600).into();
