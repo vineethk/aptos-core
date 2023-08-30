@@ -6,18 +6,15 @@ use crate::{
         anchor_election::RoundRobinAnchorElection,
         dag_store::Dag,
         order_rule::{Notifier, OrderRule},
-        tests::{dag_test::MockStorage, helpers::new_certified_node},
-        types::{NodeCertificate, NodeMetadata},
+        tests::{dag_test::MockStorage, helpers::generate_dag_nodes},
+        types::NodeMetadata,
         CertifiedNode,
     },
     test_utils::placeholder_ledger_info,
 };
 use aptos_consensus_types::common::{Author, Round};
 use aptos_infallible::{Mutex, RwLock};
-use aptos_types::{
-    aggregate_signature::AggregateSignature, epoch_state::EpochState,
-    validator_verifier::random_validator_verifier,
-};
+use aptos_types::{epoch_state::EpochState, validator_verifier::random_validator_verifier};
 use futures_channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use proptest::prelude::*;
 use std::sync::Arc;
@@ -75,46 +72,6 @@ fn generate_permutations(
         Just((0..total_number).collect::<Vec<_>>()).prop_shuffle(),
         num_perm,
     )
-}
-
-/// Generate certified nodes for dag given the virtual dag
-fn generate_dag_nodes(
-    dag: &[Vec<Option<Vec<bool>>>],
-    validators: &[Author],
-) -> Vec<Vec<Option<CertifiedNode>>> {
-    let mut nodes = vec![];
-    let mut previous_round: Vec<Option<CertifiedNode>> = vec![];
-    for (round, round_nodes) in dag.iter().enumerate() {
-        let mut nodes_at_round = vec![];
-        for (idx, author) in validators.iter().enumerate() {
-            if let Some(bitmask) = &round_nodes[idx] {
-                // the bitmask is compressed (without the holes), we need to flatten the previous round nodes
-                // to match the index
-                let parents: Vec<_> = previous_round
-                    .iter()
-                    .flatten()
-                    .enumerate()
-                    .filter(|(idx, _)| *bitmask.get(*idx).unwrap_or(&false))
-                    .map(|(_, node)| {
-                        NodeCertificate::new(node.metadata().clone(), AggregateSignature::empty())
-                    })
-                    .collect();
-                if round > 1 {
-                    assert_eq!(parents.len(), validators.len() * 2 / 3 + 1);
-                }
-                nodes_at_round.push(Some(new_certified_node(
-                    (round + 1) as u64,
-                    *author,
-                    parents,
-                )));
-            } else {
-                nodes_at_round.push(None);
-            }
-        }
-        previous_round = nodes_at_round.clone();
-        nodes.push(nodes_at_round);
-    }
-    nodes
 }
 
 pub struct TestNotifier {

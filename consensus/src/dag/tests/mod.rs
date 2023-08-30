@@ -10,3 +10,4 @@ mod integration_tests;
 mod order_rule_tests;
 mod rb_handler_tests;
 mod types_test;
+mod dag_state_sync_tests;
