@@ -1,31 +1,35 @@
 name: "Docker build setup"
 description: |
   Runs an opinionated and unified docker build setup action. It does the following:
-  * Logs in to docker image registries (AWS ECR and GCP GAR)
+  * Logs in to docker image registries
+    * Only if the GCP args are provided will it log into GAR.
+    * Only if the AWS args are provided will it log into ECR.
   * Setup for buildx and other dependencies (crane)
   * Sets git credentials for private builds
 inputs:
   # GCP auth
   GCP_WORKLOAD_IDENTITY_PROVIDER:
-    required: true
+    required: false
     description: "GCP Workload Identity provider"
   GCP_SERVICE_ACCOUNT_EMAIL:
-    required: true
+    required: false
     description: "GCP service account email"
   EXPORT_GCP_PROJECT_VARIABLES:
     required: false
     description: "Whether to export GCP credentials to the environment. Useful for running gcloud commands"
     default: "true"
+
   # AWS auth
   AWS_ACCESS_KEY_ID:
-    required: true
+    required: false
     description: "AWS access key id"
   AWS_SECRET_ACCESS_KEY:
-    required: true
+    required: false
     description: "AWS secret access key"
   AWS_DOCKER_ARTIFACT_REPO:
-    required: true
+    required: false
     description: "AWS ECR repo to authenticate to"
+
   # Optional git auth
   GIT_CREDENTIALS:
     description: "Optional credentials to pass to git. Useful if you need to pull private repos for dependencies"
@@ -36,6 +40,7 @@ inputs:
     # setting this to 1.5h since sometimes docker builds (special performance
     # builds etc.) take that long. Default is 1h.
     default: 5400
+
 outputs:
   CLOUDSDK_AUTH_ACCESS_TOKEN:
     description: "GCP access token"
@@ -44,6 +49,42 @@ outputs:
 runs:
   using: composite
   steps:
+    # There is no way to declare an input as required conditionally with Github Actions
+    # so we do it ourselves here. If the user is trying to setup GCP or AWS, we ensure
+    # that they have provided all of the required args.
+
+    # Check GCP args.
+    - name: Check GCP args
+      shell: bash
+      if: inputs.GCP_WORKLOAD_IDENTITY_PROVIDER != '' || inputs.GCP_SERVICE_ACCOUNT_EMAIL != ''
+      run: |
+        if [[ -z "${{ inputs.GCP_WORKLOAD_IDENTITY_PROVIDER }}" ]]; then
+          echo "GCP_WORKLOAD_IDENTITY_PROVIDER is required if GCP_SERVICE_ACCOUNT_EMAIL is provided"
+          exit 1
+        fi
+        if [[ -z "${{ inputs.GCP_SERVICE_ACCOUNT_EMAIL }}" ]]; then
+          echo "GCP_SERVICE_ACCOUNT_EMAIL is required if GCP_WORKLOAD_IDENTITY_PROVIDER is provided"
+          exit 1
+        fi
+
+    # Check AWS args.
+    - name: Check AWS args
+      shell: bash
+      if: inputs.AWS_ACCESS_KEY_ID != '' || inputs.AWS_SECRET_ACCESS_KEY != '' || inputs.AWS_DOCKER_ARTIFACT_REPO != ''
+      run: |
+        if [[ -z "${{ inputs.AWS_ACCESS_KEY_ID }}" ]]; then
+          echo "AWS_ACCESS_KEY_ID is required if AWS_SECRET_ACCESS_KEY or AWS_DOCKER_ARTIFACT_REPO is provided"
+          exit 1
+        fi
+        if [[ -z "${{ inputs.AWS_SECRET_ACCESS_KEY }}" ]]; then
+          echo "AWS_SECRET_ACCESS_KEY is required if AWS_ACCESS_KEY_ID or AWS_DOCKER_ARTIFACT_REPO is provided"
+          exit 1
+        fi
+        if [[ -z "${{ inputs.AWS_DOCKER_ARTIFACT_REPO }}" ]]; then
+          echo "AWS_DOCKER_ARTIFACT_REPO is required if AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY is provided"
+          exit 1
+        fi
+
     - name: setup docker context for buildx
       id: buildx-context
       shell: bash
@@ -75,6 +116,7 @@ runs:
     - id: auth
       name: "Authenticate to Google Cloud"
       uses: "google-github-actions/auth@dac4e13deb3640f22e3ffe758fd3f95e6e89f712" # pin@v0
+      if: inputs.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
       with:
         create_credentials_file: false
         token_format: "access_token"
@@ -85,6 +127,7 @@ runs:
 
     - name: Login to us-west1 Google Artifact Registry
       uses: docker/login-action@49ed152c8eca782a232dede0303416e8f356c37b # pin@v2
+      if: inputs.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
       with:
         registry: us-west1-docker.pkg.dev
         username: oauth2accesstoken
@@ -92,6 +135,7 @@ runs:
 
     - name: Login to US multi-region Google Artifact Registry
       uses: docker/login-action@49ed152c8eca782a232dede0303416e8f356c37b # pin@v2
+      if: inputs.GCP_WORKLOAD_IDENTITY_PROVIDER != ''
       with:
         registry: us-docker.pkg.dev
         username: oauth2accesstoken
@@ -99,6 +143,7 @@ runs:
 
     - name: Login to ECR
       uses: docker/login-action@49ed152c8eca782a232dede0303416e8f356c37b # pin@v2
+      if: inputs.AWS_ACCESS_KEY_ID != ''
       with:
         registry: ${{ inputs.AWS_DOCKER_ARTIFACT_REPO }}
         username: ${{ inputs.AWS_ACCESS_KEY_ID }}
