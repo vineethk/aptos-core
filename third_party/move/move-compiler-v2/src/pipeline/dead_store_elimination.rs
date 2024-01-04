@@ -66,6 +66,8 @@ impl FunctionTargetProcessor for DeadStoreElimination {
             .expect("live variable annotation is a prerequisite");
         let new_code = Self::transform(code, live_var_annotation);
         data.code = new_code;
+        // Note that the file format generator will not include unused locals in the generated code,
+        // so we don't need to prune them here within `data`.
         // Annotations may no longer be valid after this transformation, so remove them.
         data.annotations.clear();
         data

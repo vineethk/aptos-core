@@ -227,6 +227,9 @@ impl TestConfig {
                 dump_annotated_targets: true,
             }
         } else if path.contains("/copy-propagation/") {
+            pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {
+                with_copy_inference: true,
+            }));
             pipeline.add_processor(Box::new(AvailCopiesAnalysisProcessor {}));
             pipeline.add_processor(Box::new(CopyPropagation {}));
             pipeline.add_processor(Box::new(LiveVarAnalysisProcessor {
